@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         屏蔽 B站 DeepSeek AI 评论
 // @namespace    local.bilibili.agent-filter
-// @version      0.2.2
+// @version      0.2.3
 // @description  UID 黑名单从评论响应中拦截，其他规则在页面折叠；支持楼中楼。
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -277,30 +277,54 @@
     b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); action(); });
     return b;
   }
+  function controlPlacement(root, folded) {
+    if (folded) return { parent: root, after: null, styleRoot: root };
+    let actions = null;
+    let richText = null;
+    walk(root, el => {
+      if (!actions && el.matches('bili-comment-action-buttons-renderer')) actions = el;
+      if (!richText && el.matches('bili-rich-text')) richText = el;
+    }, true);
+    // 与本条评论的“回复”按钮放在一起，不插到下一个评论上方。
+    const reply = actions?.shadowRoot?.querySelector('#reply');
+    if (reply) return { parent: reply.parentNode, after: reply, styleRoot: actions.shadowRoot };
+    const anchor = actions || richText;
+    if (anchor) return { parent: anchor.parentNode, after: anchor, styleRoot: anchor.getRootNode() };
+    return { parent: root, after: root.lastElementChild, styleRoot: root };
+  }
   function render(item, record, result) {
     const root = item.shadowRoot || item;
     let state = states.get(item);
     const identity = JSON.stringify([location.pathname, record.uid, record.text]);
     if (!state || state.identity !== identity) {
-      state?.ui.remove(); state?.style.remove();
+      state?.ui.remove(); state?.style.remove(); state?.actionStyle?.remove();
       state = { identity, expanded: false, version: ruleVersion, signature: '' };
       states.set(item, state);
     }
     if (state.version !== ruleVersion) { state.expanded = false; state.version = ruleVersion; }
     const isFolded = result.fold && !state.expanded;
+    const placement = controlPlacement(root, isFolded);
     const signature = JSON.stringify([record.uid, record.name, result, isFolded, config.enabled, ruleVersion]);
-    if (state.signature === signature && state.ui?.parentNode === root && state.style?.parentNode === root) return isFolded;
+    if (state.signature === signature && state.ui?.parentNode === placement.parent && state.style?.parentNode === root
+      && (placement.styleRoot === root || state.actionStyle?.parentNode === placement.styleRoot)) return isFolded;
     state.signature = signature;
-    state.ui?.remove(); state.style?.remove();
+    state.ui?.remove(); state.style?.remove(); state.actionStyle?.remove();
     const ui = document.createElement('div');
     ui.setAttribute('data-baf-ui', '');
+    ui.setAttribute('data-baf-summary', String(isFolded));
+    ui.setAttribute('role', 'group');
+    ui.setAttribute('aria-label', '本条评论作者 ' + (record.name || record.uid || '未知') + ' 的屏蔽设置');
     const style = document.createElement('style');
     style.setAttribute('data-baf-style', '');
     // 只隐藏当前 renderer 的内容，主楼的回复列表（位于 thread 内）保留。
     const target = item.shadowRoot ? ':host([data-baf-fold])' : '[data-baf-fold]';
     style.textContent = `${target} > :not([data-baf-ui]):not(style):not(.sub-reply-container):not(.reply-box) {display:none!important}
-      [data-baf-ui]{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0;font:12px/1.6 sans-serif;color:var(--text2,#888)}
-      [data-baf-ui] button{font:inherit;color:inherit;background:transparent;border:1px solid #8886;border-radius:4px;cursor:pointer;padding:0 5px}`;
+      [data-baf-ui]{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:100%;margin:0 0 0 12px;vertical-align:middle;font:12px/1.6 sans-serif;color:var(--text3,#9499a0)}
+      [data-baf-ui]:empty{display:none}
+      [data-baf-ui][data-baf-summary="true"]{display:flex;margin:6px 0;padding:6px 10px;border-left:2px solid #9499a066}
+      [data-baf-ui] button{font:inherit;color:inherit;background:transparent;border:0;border-radius:3px;cursor:pointer;padding:1px 3px;white-space:nowrap}
+      [data-baf-ui] button:hover{color:var(--brand_blue,#00aeec);background:#00aeec0d}
+      [data-baf-ui] button:focus-visible{outline:2px solid var(--brand_blue,#00aeec);outline-offset:2px}`;
     item.toggleAttribute('data-baf-fold', isFolded);
     if (result.reasons.length) {
       const label = document.createElement('span');
@@ -315,9 +339,16 @@
         ui.append(button('屏蔽此 UID', () => save({ ...config, blockedUIDs: [...config.blockedUIDs, record.uid] })));
       }
     }
-    ui.title = 'UID: ' + (record.uid || '未读到；可在设置中手动添加') + '。文本规则不能证实是否由 Agent 发送。';
+    ui.title = '本条评论作者：' + (record.name || '未知') + '；UID: ' + (record.uid || '未读到；可在设置中手动添加') + '。文本规则不能证实是否由 Agent 发送。';
     state.ui = ui; state.style = style;
-    root.prepend(style, ui);
+    root.prepend(style);
+    state.actionStyle = null;
+    if (placement.styleRoot !== root) {
+      state.actionStyle = style.cloneNode(true);
+      placement.styleRoot.append(state.actionStyle);
+    }
+    if (placement.after?.parentNode === placement.parent) placement.after.after(ui);
+    else placement.parent.append(ui);
     return isFolded;
   }
   function observe(root) {
