@@ -2,6 +2,8 @@
 
 一个用于整理 B 站视频评论区的油猴脚本：屏蔽指定账号，折叠命中文本规则的评论，支持暂停、撤销和名单备份。
 
+当前正式版本：**1.0.0**。更新说明见 [CHANGELOG](./CHANGELOG.md)。
+
 **[前往 Greasy Fork 安装](https://greasyfork.org/zh-CN/scripts/604358-%E5%B1%8F%E8%94%BD-b%E7%AB%99-deepseek-ai-%E8%AF%84%E8%AE%BA)** · [反馈问题](https://github.com/Orange-Summer/bilibili-deepseek-comment-blocker/issues)
 
 ## 安装

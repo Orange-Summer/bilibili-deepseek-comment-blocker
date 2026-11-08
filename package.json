@@ -1,6 +1,6 @@
 {
   "name": "bilibili-deepseek-comment-blocker",
-  "version": "0.2.4",
+  "version": "1.0.0",
   "private": true,
   "description": "屏蔽 B站 DeepSeek AI 评论，支持 UID 名单与可撤销折叠",
   "scripts": {

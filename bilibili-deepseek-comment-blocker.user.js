@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         屏蔽 B站 DeepSeek AI 评论
 // @namespace    local.bilibili.agent-filter
-// @version      0.2.4
+// @version      1.0.0
 // @description  UID 黑名单从评论响应中拦截，其他规则在页面折叠；支持楼中楼。
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -84,7 +84,7 @@
   let consoleSignature = '';
   function logStatus(reason, force = false) {
     const stats = {
-      版本: '0.2.4',
+      版本: '1.0.0',
       状态: config.enabled ? '已启用' : '已暂停',
       模式: config.mode,
       黑名单数量: config.blockedUIDs.length,
