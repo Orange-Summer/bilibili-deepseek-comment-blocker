@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         屏蔽 B站 DeepSeek AI 评论
 // @namespace    local.bilibili.agent-filter
-// @version      0.2.1
+// @version      0.2.2
 // @description  UID 黑名单从评论响应中拦截，其他规则在页面折叠；支持楼中楼。
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -308,7 +308,7 @@
       ui.append(label);
       if (result.fold) ui.append(button(isFolded ? '展开原文' : '重新折叠', () => { state.expanded = !state.expanded; state.signature = ''; schedule(); }));
     }
-    if (record.uid && config.enabled) {
+    if (record.uid) {
       if (config.blockedUIDs.includes(record.uid)) {
         ui.append(button('移出黑名单', () => save({ ...config, blockedUIDs: config.blockedUIDs.filter(x => x !== record.uid) })));
       } else {
