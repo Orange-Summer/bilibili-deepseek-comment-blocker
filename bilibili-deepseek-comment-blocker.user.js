@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         屏蔽 B站 DeepSeek AI 评论
 // @namespace    local.bilibili.agent-filter
-// @version      0.2.3
+// @version      0.2.4
 // @description  UID 黑名单从评论响应中拦截，其他规则在页面折叠；支持楼中楼。
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -77,6 +77,42 @@
 
   const W = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
   const network = { fetch: false, xhr: false, responses: 0, removed: 0 };
+  const LOG_PREFIX = '[B站评论屏蔽]';
+  let consoleTimer = null;
+  let consoleReason = '统计更新';
+  let forceConsole = false;
+  let consoleSignature = '';
+  function logStatus(reason, force = false) {
+    const stats = {
+      版本: '0.2.4',
+      状态: config.enabled ? '已启用' : '已暂停',
+      模式: config.mode,
+      黑名单数量: config.blockedUIDs.length,
+      页面已读取评论: scanned,
+      页面规则命中: hits,
+      页面当前折叠: folded,
+      响应累计移除节点_含重复返回: network.removed,
+      发生拦截的响应数: network.responses,
+      Fetch钩子: network.fetch ? '已安装' : '未安装',
+      XHR钩子: network.xhr ? '已安装' : '未安装'
+    };
+    const signature = JSON.stringify(stats);
+    if (!force && signature === consoleSignature) return;
+    consoleSignature = signature;
+    // 仅记录计数，不输出 UID 清单、用户名或评论正文；日志失败不影响过滤。
+    try { console.info(LOG_PREFIX, reason, stats); } catch { /* 保留过滤行为 */ }
+  }
+  function queueStatus(reason = '统计更新', force = false) {
+    if (force || consoleTimer === null) consoleReason = reason;
+    forceConsole ||= force;
+    if (consoleTimer !== null) return;
+    consoleTimer = setTimeout(() => {
+      consoleTimer = null;
+      const force = forceConsole;
+      forceConsole = false;
+      logStatus(consoleReason, force);
+    }, 500);
+  }
   function replyEndpoint(input, method = 'GET') {
     if (String(method).toUpperCase() !== 'GET') return false;
     try {
@@ -121,6 +157,7 @@
   function account(removed) {
     network.responses++;
     network.removed += removed;
+    queueStatus();
   }
   function pageFunction(fn) {
     return typeof exportFunction === 'function' ? exportFunction(fn, W) : fn;
@@ -264,11 +301,13 @@
     return { uid, name, text: normalize(content.textContent) };
   }
   function save(next) {
+    const wasEnabled = config.enabled;
     try { next = validate(next); GM_setValue(KEY, next); config = next; }
     catch (e) { alert('未保存：' + e.message); return; }
     // 同一条已展开评论在规则修改后重新判定。
     ruleVersion++;
     schedule();
+    queueStatus(wasEnabled !== config.enabled ? (config.enabled ? '已恢复过滤' : '已暂停过滤') : '设置已更新', true);
   }
   let ruleVersion = 0;
   function button(label, action) {
@@ -367,6 +406,7 @@
     observers.set(root, observer);
   }
   function scan() {
+    const previous = [scanned, hits, folded].join(':');
     scanned = hits = folded = 0;
     if (lastURL !== location.href) { lastURL = location.href; ruleVersion++; }
     for (const [root, observer] of observers) {
@@ -390,6 +430,7 @@
       if (result.reasons.length) hits++;
       if (render(item, record, result)) folded++;
     }
+    if (previous !== [scanned, hits, folded].join(':')) queueStatus();
   }
   GM_registerMenuCommand('设置 / 导入导出 JSON', () => {
     const raw = prompt('可复制备份。UID 请用字符串。mode: observe 只标记 / balanced 保守折叠 / strict 扩大折叠', JSON.stringify(config, null, 2));
@@ -397,8 +438,13 @@
     try { save(JSON.parse(raw)); } catch (e) { alert('JSON 无效：' + e.message); }
   });
   GM_registerMenuCommand('暂停 / 恢复（响应中已移除的评论需刷新）', () => save({ ...config, enabled: !config.enabled }));
-  GM_registerMenuCommand('当前扫描状态', () => alert(`已读取 ${scanned} 条；规则命中 ${hits} 条；当前折叠 ${folded} 条。\n页面计数仅包含已加载且可读取的评论。0 条可能是尚未加载或页面结构变化。\n响应层累计移除 ${network.removed} 个命中节点，涉及 ${network.responses} 份响应（含重复返回）。\nFetch 钩子：${network.fetch}；XHR 钩子：${network.xhr}。\n响应中已移除的评论需暂停或移出黑名单后刷新恢复。\n模式：${config.mode}；启用：${config.enabled}`));
+  GM_registerMenuCommand('当前扫描状态', () => {
+    scan();
+    logStatus('手动统计', true);
+    alert(`已读取 ${scanned} 条；规则命中 ${hits} 条；当前折叠 ${folded} 条。\n页面计数仅包含已加载且可读取的评论。0 条可能是尚未加载或页面结构变化。\n响应层累计移除 ${network.removed} 个命中节点，涉及 ${network.responses} 份响应（含重复返回）。\nFetch 钩子：${network.fetch}；XHR 钩子：${network.xhr}。\n响应中已移除的评论需暂停或移出黑名单后刷新恢复。\n模式：${config.mode}；启用：${config.enabled}`);
+  });
   scan();
+  logStatus(config.enabled ? '脚本已启用' : '脚本已加载（暂停）', true);
   // 兜底发现延迟 attachShadow 和评论区整体重建；后台标签不轮询。
   setInterval(() => { if (!document.hidden) schedule(); }, 2500);
 })();

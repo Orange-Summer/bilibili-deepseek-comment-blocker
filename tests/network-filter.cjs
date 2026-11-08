@@ -24,8 +24,11 @@ const { chromium } = require('playwright');
         body: variant === 'broken' ? '{broken' : JSON.stringify(data) });
     });
     let source = fs.readFileSync(path.join(__dirname, '..', 'bilibili-deepseek-comment-blocker.user.js'), 'utf8');
-    source = source.replace('  scan();\n  // 兜底', '  window.__networkTest = { filterPayload, replyEndpoint, save, defaults: DEFAULTS, network };\n  scan();\n  // 兜底');
+    source = source.replace('  // 兜底', '  window.__networkTest = { filterPayload, replyEndpoint, save, defaults: DEFAULTS, network };\n  // 兜底');
     await page.addInitScript(() => {
+      window.__consoleLogs = [];
+      const nativeInfo = console.info.bind(console);
+      console.info = (...args) => { window.__consoleLogs.push(args); nativeInfo(...args); };
       window.GM_getValue = (_, defaults) => ({ ...defaults, blockedUIDs: ['456', '9007199254740993'] });
       window.GM_setValue = () => {};
       window.GM_registerMenuCommand = () => {};
@@ -115,6 +118,11 @@ const { chromium } = require('playwright');
       const earlierFetch = window.fetch;
       check('hooks installed', t.network.fetch && t.network.xhr && typeof earlierFetch === 'function');
       check('network counters recorded', t.network.responses > 0 && t.network.removed > 0);
+      await new Promise(resolve => setTimeout(resolve, 650));
+      const entries = window.__consoleLogs.filter(entry => entry[0] === '[B站评论屏蔽]');
+      const logged = entries.at(-1)?.[2];
+      check('console reports actual response counters and blacklist size', logged?.响应累计移除节点_含重复返回 === t.network.removed && logged?.发生拦截的响应数 === t.network.responses && logged?.黑名单数量 === 2);
+      check('console does not expose UID list or comment text', !JSON.stringify(entries).includes('9007199254740993') && !JSON.stringify(entries).includes('本鱼来了'));
       return result;
     });
     for (const [name, ok] of checks) { console.log((ok ? 'PASS ' : 'FAIL ') + name); assert(ok, name); }
