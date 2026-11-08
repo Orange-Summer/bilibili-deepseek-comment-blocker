@@ -82,7 +82,7 @@ const { chromium } = require('playwright');
       const unsafe = await get('?case=invalid-mid');
       check('unsafe numeric UID retained, safe numeric UID blocked', unsafe.data.replies.length === 1 && unsafe.data.replies[0].rpid === '7');
       t.save({ ...config, allowedUIDs: ['456'] });
-      check('allowlist wins in response', (await get('')).data.replies.some(r => r.member.mid === '456'));
+      check('legacy exemptions cannot bypass response filtering', !(await get('')).data.replies.some(r => r.member.mid === '456'));
       t.save({ ...config, mode: 'observe' });
       check('observe mode does not delete', (await get('')).data.replies.length === 3);
       t.save({ ...config, enabled: false });

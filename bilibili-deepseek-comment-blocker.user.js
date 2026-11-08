@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         屏蔽 B站 DeepSeek AI 评论
 // @namespace    local.bilibili.agent-filter
-// @version      0.2.0
-// @description  UID 黑名单从评论响应中拦截，其他规则在页面折叠；支持白名单和楼中楼。
+// @version      0.2.1
+// @description  UID 黑名单从评论响应中拦截，其他规则在页面折叠；支持楼中楼。
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
 // @grant        unsafeWindow
@@ -21,16 +21,17 @@
     enabled: true,
     mode: 'balanced', // observe: 只标记；balanced: 强规则折叠；strict: 弱规则也折叠
     blockedUIDs: [],
-    allowedUIDs: [],
     blockedPhrases: [], // 用户明确指定的正文片段；不是 AI 身份证据
     personaRules: true
   };
   function validate(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('配置必须是对象');
     const c = { ...DEFAULTS, ...input };
+    // 丢弃不再支持的旧配置字段，导入旧备份时也不保留。
+    for (const key of Object.keys(c)) if (!Object.hasOwn(DEFAULTS, key)) delete c[key];
     if (typeof c.enabled !== 'boolean' || typeof c.personaRules !== 'boolean') throw Error('开关必须是 true/false');
     if (!['observe', 'balanced', 'strict'].includes(c.mode)) throw Error('mode 应为 observe / balanced / strict');
-    for (const key of ['blockedUIDs', 'allowedUIDs', 'blockedPhrases']) {
+    for (const key of ['blockedUIDs', 'blockedPhrases']) {
       if (!Array.isArray(c[key]) || c[key].length > 1000) throw Error(key + ' 必须是数组，最多 1000 项');
       c[key] = [...new Set(c[key].map(value => {
         if (typeof value !== 'string') throw Error(key + ' 中请使用字符串，UID 必须带引号');
@@ -42,12 +43,19 @@
     return c;
   }
   let config;
-  try { config = validate(GM_getValue(KEY, DEFAULTS)); }
+  try {
+    const stored = GM_getValue(KEY, DEFAULTS);
+    config = validate(stored);
+    if (JSON.stringify(stored) !== JSON.stringify(config)) {
+      try { GM_setValue(KEY, config); }
+      catch (e) { console.warn('[评论屏蔽] 配置清理未写入，当前仍使用清理后的配置', e); }
+    }
+  }
   catch (e) { config = { ...DEFAULTS }; console.warn('[Agent过滤] 配置无效，使用默认值', e); }
 
   const normalize = s => String(s || '').normalize('NFKC').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
   function classify({ uid, name, text }, c = config) {
-    if (!c.enabled || (uid && c.allowedUIDs.includes(uid))) return { score: 0, reasons: [], fold: false };
+    if (!c.enabled) return { score: 0, reasons: [], fold: false };
     const reasons = [];
     let score = 0;
     let hard = false;
@@ -83,12 +91,11 @@
     if (!c.enabled || c.mode === 'observe' || !c.blockedUIDs.length
       || payload?.code !== 0 || !payload.data || typeof payload.data !== 'object') return 0;
     const denied = new Set(c.blockedUIDs);
-    const allowed = new Set(c.allowedUIDs);
     let removed = 0;
     function blocked(reply) {
       const mid = reply?.member?.mid;
       const uid = typeof mid === 'string' ? mid : Number.isSafeInteger(mid) ? String(mid) : '';
-      return /^[1-9]\d*$/.test(uid) && denied.has(uid) && !allowed.has(uid);
+      return /^[1-9]\d*$/.test(uid) && denied.has(uid);
     }
     function list(replies) {
       return replies.filter(reply => {
@@ -304,10 +311,9 @@
     if (record.uid && config.enabled) {
       if (config.blockedUIDs.includes(record.uid)) {
         ui.append(button('移出黑名单', () => save({ ...config, blockedUIDs: config.blockedUIDs.filter(x => x !== record.uid) })));
-      } else if (!config.allowedUIDs.includes(record.uid)) {
+      } else {
         ui.append(button('屏蔽此 UID', () => save({ ...config, blockedUIDs: [...config.blockedUIDs, record.uid] })));
       }
-      if (result.reasons.length) ui.append(button('信任此 UID', () => save({ ...config, allowedUIDs: [...config.allowedUIDs, record.uid] })));
     }
     ui.title = 'UID: ' + (record.uid || '未读到；可在设置中手动添加') + '。文本规则不能证实是否由 Agent 发送。';
     state.ui = ui; state.style = style;
@@ -355,7 +361,7 @@
     }
   }
   GM_registerMenuCommand('设置 / 导入导出 JSON', () => {
-    const raw = prompt('可复制备份。白名单优先；UID 请用字符串。mode: observe 只标记 / balanced 保守折叠 / strict 扩大折叠', JSON.stringify(config, null, 2));
+    const raw = prompt('可复制备份。UID 请用字符串。mode: observe 只标记 / balanced 保守折叠 / strict 扩大折叠', JSON.stringify(config, null, 2));
     if (raw === null) return;
     try { save(JSON.parse(raw)); } catch (e) { alert('JSON 无效：' + e.message); }
   });
