@@ -1,0 +1,16 @@
+{
+  "name": "bilibili-agent-filter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bilibili comment filter userscript with reversible folding and UID lists",
+  "scripts": {
+    "check": "node --check bilibili-agent-filter.user.js && node --check tests/check-filter.cjs",
+    "test": "node tests/check-filter.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}
