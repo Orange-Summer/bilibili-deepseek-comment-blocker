@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         屏蔽 B站 DeepSeek AI 评论
 // @namespace    local.bilibili.agent-filter
-// @version      0.1.1
-// @description  UID 黑白名单、可解释的组合规则、独立折叠楼中楼。规则命中不代表身份已证实。
+// @version      0.2.0
+// @description  UID 黑名单从评论响应中拦截，其他规则在页面折叠；支持白名单和楼中楼。
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*
+// @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
-// @run-at       document-idle
+// @run-at       document-start
 // @noframes
 // @license      MIT
 // ==/UserScript==
@@ -65,6 +66,143 @@
     const fold = c.mode !== 'observe' && (hard || score >= (c.mode === 'strict' ? 2 : 5));
     return { score, reasons: hit ? reasons : [], fold };
   }
+
+  const W = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
+  const network = { fetch: false, xhr: false, responses: 0, removed: 0 };
+  function replyEndpoint(input, method = 'GET') {
+    if (String(method).toUpperCase() !== 'GET') return false;
+    try {
+      const raw = typeof input === 'string' ? input : input?.url || String(input);
+      const url = new URL(raw, location.href);
+      return url.protocol === 'https:' && url.hostname === 'api.bilibili.com'
+        && ['/x/v2/reply', '/x/v2/reply/main', '/x/v2/reply/wbi/main', '/x/v2/reply/reply'].includes(url.pathname);
+    } catch { return false; }
+  }
+  // 只看 author/member.mid，不根据昵称、@ 链接或正文推断黑名单。
+  function filterPayload(payload, c = config) {
+    if (!c.enabled || c.mode === 'observe' || !c.blockedUIDs.length
+      || payload?.code !== 0 || !payload.data || typeof payload.data !== 'object') return 0;
+    const denied = new Set(c.blockedUIDs);
+    const allowed = new Set(c.allowedUIDs);
+    let removed = 0;
+    function blocked(reply) {
+      const mid = reply?.member?.mid;
+      const uid = typeof mid === 'string' ? mid : Number.isSafeInteger(mid) ? String(mid) : '';
+      return /^[1-9]\d*$/.test(uid) && denied.has(uid) && !allowed.has(uid);
+    }
+    function list(replies) {
+      return replies.filter(reply => {
+        if (blocked(reply)) { removed++; return false; }
+        if (Array.isArray(reply?.replies)) reply.replies = list(reply.replies);
+        return true;
+      });
+    }
+    const data = payload.data;
+    for (const key of ['replies', 'top_replies', 'hots']) {
+      if (Array.isArray(data[key])) data[key] = list(data[key]);
+    }
+    if (data.top && typeof data.top === 'object' && !Array.isArray(data.top)) {
+      for (const key of ['upper', 'admin', 'vote']) {
+        const reply = data.top[key];
+        if (blocked(reply)) { data.top[key] = null; removed++; }
+        else if (Array.isArray(reply?.replies)) reply.replies = list(reply.replies);
+      }
+    }
+    // 游标、page.count、rcount 都是服务端的分页/总数信息，不按当前预览数量改写。
+    return removed;
+  }
+  function account(removed) {
+    network.responses++;
+    network.removed += removed;
+  }
+  function pageFunction(fn) {
+    return typeof exportFunction === 'function' ? exportFunction(fn, W) : fn;
+  }
+  function responseMetadata(response, original) {
+    for (const key of ['url', 'type', 'redirected']) {
+      Object.defineProperty(response, key, { configurable: true, value: original[key] });
+    }
+    Object.defineProperty(response, 'clone', { configurable: true, value: pageFunction(function () {
+      return responseMetadata(W.Response.prototype.clone.call(this), original);
+    }) });
+    return response;
+  }
+  function installNetworkHooks() {
+    if (typeof W.fetch === 'function') {
+      try {
+        const nativeFetch = W.fetch;
+        W.fetch = pageFunction(function (input, init) {
+          const request = nativeFetch.apply(this, arguments);
+          if (!replyEndpoint(input, init?.method || input?.method || 'GET')) return request;
+          return request.then(async response => {
+            if (!response.ok || !config.enabled || config.mode === 'observe' || !config.blockedUIDs.length) return response;
+            try {
+              const payload = W.JSON.parse(await response.clone().text());
+              const removed = filterPayload(payload);
+              if (!removed) return response;
+              const headers = new W.Headers(response.headers);
+              for (const key of ['content-length', 'content-encoding', 'content-md5', 'etag', 'digest']) headers.delete(key);
+              const replacement = responseMetadata(new W.Response(W.JSON.stringify(payload), {
+                status: response.status, statusText: response.statusText, headers
+              }), response);
+              account(removed);
+              return replacement;
+            } catch { return response; } // 格式变化、解析或构造失败时保留原响应
+          });
+        });
+        network.fetch = true;
+      } catch (e) { console.warn('[评论屏蔽] Fetch 钩子未安装，保留页面折叠', e); }
+    }
+    const proto = W.XMLHttpRequest?.prototype;
+    const textDescriptor = proto && Object.getOwnPropertyDescriptor(proto, 'responseText');
+    const responseDescriptor = proto && Object.getOwnPropertyDescriptor(proto, 'response');
+    if (!textDescriptor?.get || !responseDescriptor?.get) return;
+    try {
+      const nativeOpen = proto.open;
+      const requests = new WeakMap();
+      function output(xhr) {
+        const state = requests.get(xhr);
+        if (!state?.target || xhr.readyState !== 4 || xhr.status < 200 || xhr.status >= 300) return null;
+        if (state.done) return state.result;
+        state.done = true;
+        try {
+          const type = xhr.responseType;
+          if (type !== '' && type !== 'text' && type !== 'json') return null;
+          if (!config.enabled || config.mode === 'observe' || !config.blockedUIDs.length) return null;
+          const original = type === 'json' ? responseDescriptor.get.call(xhr) : textDescriptor.get.call(xhr);
+          // json 模式也复制后再过滤，避免改变浏览器持有的原对象。
+          const payload = W.JSON.parse(type === 'json' ? W.JSON.stringify(original) : original);
+          const removed = filterPayload(payload);
+          if (!removed) return null;
+          state.result = { value: type === 'json' ? payload : W.JSON.stringify(payload) };
+          account(removed);
+          return state.result;
+        } catch { return null; }
+      }
+      proto.open = pageFunction(function (method, url) {
+        const returned = nativeOpen.apply(this, arguments);
+        const state = { target: replyEndpoint(url, method), done: false, result: null };
+        requests.set(this, state);
+        if (state.target && !Object.hasOwn(this, 'response') && !Object.hasOwn(this, 'responseText')) {
+          try {
+            Object.defineProperties(this, {
+              responseText: { configurable: true, get: pageFunction(function () {
+                // 非文本类型保留原生 InvalidStateError。
+                if (this.responseType !== '' && this.responseType !== 'text') return textDescriptor.get.call(this);
+                return output(this)?.value ?? textDescriptor.get.call(this);
+              }) },
+              response: { configurable: true, get: pageFunction(function () {
+                return output(this)?.value ?? responseDescriptor.get.call(this);
+              }) }
+            });
+          } catch { /* 无法覆盖时沿用页面折叠 */ }
+        }
+        return returned;
+      });
+      network.xhr = true;
+    } catch (e) { console.warn('[评论屏蔽] XHR 钩子未安装，保留页面折叠', e); }
+  }
+  installNetworkHooks();
 
   const ITEM = 'bili-comment-renderer,bili-comment-reply-renderer';
   const states = new WeakMap();
@@ -221,8 +359,8 @@
     if (raw === null) return;
     try { save(JSON.parse(raw)); } catch (e) { alert('JSON 无效：' + e.message); }
   });
-  GM_registerMenuCommand('暂停 / 恢复（立即生效）', () => save({ ...config, enabled: !config.enabled }));
-  GM_registerMenuCommand('当前扫描状态', () => alert(`已读取 ${scanned} 条；规则命中 ${hits} 条；当前折叠 ${folded} 条。\n仅统计已加载且可读取的评论。0 条可能是尚未加载或页面结构变化。\n模式：${config.mode}；启用：${config.enabled}`));
+  GM_registerMenuCommand('暂停 / 恢复（响应中已移除的评论需刷新）', () => save({ ...config, enabled: !config.enabled }));
+  GM_registerMenuCommand('当前扫描状态', () => alert(`已读取 ${scanned} 条；规则命中 ${hits} 条；当前折叠 ${folded} 条。\n页面计数仅包含已加载且可读取的评论。0 条可能是尚未加载或页面结构变化。\n响应层累计移除 ${network.removed} 个命中节点，涉及 ${network.responses} 份响应（含重复返回）。\nFetch 钩子：${network.fetch}；XHR 钩子：${network.xhr}。\n响应中已移除的评论需暂停或移出黑名单后刷新恢复。\n模式：${config.mode}；启用：${config.enabled}`));
   scan();
   // 兜底发现延迟 attachShadow 和评论区整体重建；后台标签不轮询。
   setInterval(() => { if (!document.hidden) schedule(); }, 2500);
