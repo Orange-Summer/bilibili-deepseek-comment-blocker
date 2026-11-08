@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         B站评论 Agent 过滤（可撤销）
+// @name         屏蔽 B站 DeepSeek AI 评论
 // @namespace    local.bilibili.agent-filter
-// @version      0.1.0
+// @version      0.1.1
 // @description  UID 黑白名单、可解释的组合规则、独立折叠楼中楼。规则命中不代表身份已证实。
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/bangumi/play/*

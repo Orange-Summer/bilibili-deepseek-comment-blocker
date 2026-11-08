@@ -1,10 +1,10 @@
 {
-  "name": "bilibili-agent-filter",
-  "version": "0.1.0",
+  "name": "bilibili-deepseek-comment-blocker",
+  "version": "0.1.1",
   "private": true,
-  "description": "Bilibili comment filter userscript with reversible folding and UID lists",
+  "description": "屏蔽 B站 DeepSeek AI 评论，支持 UID 名单与可撤销折叠",
   "scripts": {
-    "check": "node --check bilibili-agent-filter.user.js && node --check tests/check-filter.cjs",
+    "check": "node --check bilibili-deepseek-comment-blocker.user.js && node --check tests/check-filter.cjs",
     "test": "node tests/check-filter.cjs"
   },
   "engines": {

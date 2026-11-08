@@ -30,7 +30,7 @@ const { chromium } = require('playwright');
       window.suspect = makeItem('456', '某人的大肥鱼', '本鱼也这么觉得');
       window.reply = makeItem('789', '真人', '我是正常楼中楼', threadRoot, 'bili-comment-reply-renderer');
     });
-    let source = fs.readFileSync(path.join(__dirname, '..', 'bilibili-agent-filter.user.js'),'utf8');
+    let source = fs.readFileSync(path.join(__dirname, '..', 'bilibili-deepseek-comment-blocker.user.js'),'utf8');
     source = source.replace('  scan();\n  // 兜底', '  window.__test = { classify, validate, read, scan, save, defaults: DEFAULTS };\n  scan();\n  // 兜底');
     await page.addScriptTag({content:source});
     const results = await page.evaluate(async () => {
